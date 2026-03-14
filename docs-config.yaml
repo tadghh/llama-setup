@@ -1,0 +1,16 @@
+app:
+  storePath: ~/.docs-mcp-server
+  telemetryEnabled: false
+  embeddingModel: openai:PeterAM4/Qwen3-Embedding-0.6B-GGUF:Q5_K_M
+
+scraper:
+  maxPages: 1000
+  maxDepth: 3
+  document:
+    maxSize: 10485760  # 10MB
+
+splitter:
+  preferredChunkSize: 1500
+  maxChunkSize: 8000
+
+

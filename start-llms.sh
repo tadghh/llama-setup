@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export CUDA_SCALE_LAUNCH_QUEUES=4x
+
+LLAMA_SERVER_BIN="${LLAMA_SERVER_BIN:-$HOME/Documents/local-llm/llama.cpp/build/bin/llama-server}"
+
+HF_REPO="${HF_REPO:-unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q5_K_XL}"
+DF_HF_REPO="${DF_HF_REPO:-unsloth/Qwen3.5-0.8B-GGUF:Q8_0}"
+
+CTX_SIZE="${CTX_SIZE:-262144}"
+CACHE_TYPE_K="${CACHE_TYPE_K:-q8_0}"
+CACHE_TYPE_V="${CACHE_TYPE_V:-q8_0}"
+
+KV_OFFLOAD="${KV_OFFLOAD:-1}"
+
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-10000}"
+
+GPU_LAYERS="${GPU_LAYERS:-999}"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+if [[ ! -x "$LLAMA_SERVER_BIN" ]]; then
+  echo "ERROR: llama-server not executable: $LLAMA_SERVER_BIN" >&2
+  exit 1
+fi
+
+if [[ -z "$HF_REPO" ]]; then
+  echo "ERROR: HF_REPO not set" >&2
+  exit 1
+fi
+
+detect_devices() {
+  local out devs
+  out="$("$LLAMA_SERVER_BIN" --list-devices 2>/dev/null || true)"
+
+  devs="$(echo "$out" | grep -Eo '\bcuda[0-9]+\b' | sort -Vu | paste -sd',' -)"
+  if [[ -n "$devs" ]]; then
+    echo "$devs"
+    return 0
+  fi
+
+  # Fallback: if we can count GPUs, assume cuda0..cudaN-1
+  if have nvidia-smi; then
+    local n i
+    n="$(nvidia-smi --query-gpu=index --format=csv,noheader,nounits 2>/dev/null | wc -l | tr -d ' ')"
+    if [[ "$n" =~ ^[0-9]+$ ]] && (( n > 0 )); then
+      devs=""
+      for ((i=0; i<n; i++)); do
+        devs+="${devs:+,}cuda${i}"
+      done
+      echo "$devs"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+DEVICES="${DEVICES:-}"
+if [[ -z "$DEVICES" ]]; then
+  if ! DEVICES="$(detect_devices)"; then
+    echo "ERROR: failed to auto-detect devices. Run: $LLAMA_SERVER_BIN --list-devices" >&2
+    exit 1
+  fi
+fi
+
+DEVICE_COUNT="$(awk -F',' '{print NF}' <<<"$DEVICES")"
+SPLIT_MODE="${SPLIT_MODE:-layer}"
+TENSOR_SPLIT="${TENSOR_SPLIT:-8,12}"
+
+args=(
+  --host "$HOST"
+  --port "$PORT"
+  --hf-repo "$HF_REPO"
+# --hf-repo-draft "$DF_HF_REPO"
+  --ctx-size "$CTX_SIZE"
+  --cache-type-k "$CACHE_TYPE_K"
+  --cache-type-v "$CACHE_TYPE_V"
+# --cache-type-k-draft "$CACHE_TYPE_K"
+# --cache-type-v-draft  "$CACHE_TYPE_V"
+  --gpu-layers "$GPU_LAYERS"
+  --device "$DEVICES"
+# --batch-size 16384 
+# --ubatch-size 1024
+  --jinja
+  --no-mmproj
+  --threads -1  
+  --temp 0.6 
+  --top-p 0.95 
+  --top-k 40 
+  --min-p 0.00
+  --parallel 1
+  --ctx-checkpoints 8
+# --spec-use-checkpoints on
+  --cache-ram -1
+  --metrics
+  --no-host
+  --direct-io
+# --gpu-layers-draft all
+)
+
+if (( DEVICE_COUNT > 1 )); then
+  args+=(--split-mode "$SPLIT_MODE")
+  if (( DEVICE_COUNT == 2 )); then
+    args+=(--tensor-split "$TENSOR_SPLIT")
+  fi
+fi
+
+if [[ "$KV_OFFLOAD" == "0" ]]; then
+  args+=(--no-kv-offload)
+else
+  args+=(--kv-offload)
+fi
+
+echo "exec: $LLAMA_SERVER_BIN ${args[*]} $*"
+exec "$LLAMA_SERVER_BIN" "${args[@]}" "$@"
