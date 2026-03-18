@@ -1,0 +1,20 @@
+[Unit]
+Description=Local LLM Stack
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ethan
+WorkingDirectory=/home/ethan/Documents/local-llm
+ExecStart=/bin/bash /home/ethan/Documents/local-llm/start-llms.sh
+ExecStartPost=/bin/bash /home/ethan/Documents/local-llm/start-docs.sh
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=300
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
