@@ -1,0 +1,25 @@
+[Unit]
+Description=Local LLM Docs MCP Server
+After=local-llm.service
+Requires=local-llm.service
+
+[Service]
+Type=simple
+User=ethan
+WorkingDirectory=/home/ethan/Documents/local-llm
+Environment=HOST=0.0.0.0
+Environment=OPENAI_API_KEY=none
+Environment=OPENAI_API_BASE=http://localhost:10000/v1
+Environment=DOCS_CONFIG=./docs-config.yaml
+
+ExecStart=/home/ethan/Documents/local-llm/start-docs.sh @arabold/docs-mcp-server@latest --protocol http  --host ${HOST} --config ${DOCS_CONFIG}
+
+StandardOutput=journal
+StandardError=journal
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=300
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

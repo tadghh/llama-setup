@@ -1,5 +1,5 @@
 [Unit]
-Description=Local LLM Stack
+Description=Local LLM Server
 After=network.target
 Wants=network.target
 
@@ -7,14 +7,20 @@ Wants=network.target
 Type=simple
 User=ethan
 WorkingDirectory=/home/ethan/Documents/local-llm
-ExecStart=/bin/bash /home/ethan/Documents/local-llm/start-llms.sh
-ExecStartPost=/bin/bash /home/ethan/Documents/local-llm/start-docs.sh
+
+Environment=CUDA_SCALE_LAUNCH_QUEUES=4x
+Environment=HOST=0.0.0.0
+Environment=PORT=10000
+Environment=CONFIG=./model-config.ini
+
+ExecStart=/usr/local/bin/llama-server --host ${HOST} --port ${PORT} --models-preset ${CONFIG}
+
 StandardOutput=journal
 StandardError=journal
+Restart=on-failure
+RestartSec=10
 TimeoutStartSec=300
-KillMode=control-group
-KillSignal=SIGTERM
 TimeoutStopSec=30
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
