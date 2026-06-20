@@ -1,26 +1,22 @@
 [Unit]
 Description=Local LLM Server
-After=network.target
-Wants=network.target
 
 [Service]
-Type=simple
-User=ethan
-WorkingDirectory=/home/ethan/Documents/local-llm
+Type=exec
+WorkingDirectory=%h/Documents/local-llm
 
 Environment=CUDA_SCALE_LAUNCH_QUEUES=4x
 Environment=HOST=0.0.0.0
 Environment=PORT=10000
-Environment=CONFIG=./model-config.ini
+Environment=CONFIG=%h/Documents/local-llm/model-config.ini
 
 ExecStart=/usr/local/bin/llama-server --host ${HOST} --port ${PORT} --models-preset ${CONFIG}
 
-StandardOutput=journal
-StandardError=journal
 Restart=on-failure
 RestartSec=10
 TimeoutStartSec=300
 TimeoutStopSec=30
+NoNewPrivileges=true
 
 [Install]
 WantedBy=default.target
