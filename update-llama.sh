@@ -1,13 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
-REPO_URL="https://github.com/ggml-org/llama.cpp.git"
-REPO_DIR="llama.cpp"
-REPO_BRANCH="master"
-BUILD_DIR="build"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Install under the user's home (no root needed). Override with INSTALL_PREFIX=...
-INSTALL_PREFIX="${INSTALL_PREFIX:-$HOME/.local}"
+REPO_URL="https://github.com/ggml-org/llama.cpp.git"
+REPO_REPO="ggml-org/llama.cpp"
+REPO_DIR="llama.cpp"
+BUILD_DIR="build"
+VERSION_FILE="${SCRIPT_DIR}/.llama-version"
 
 # Backend toggles (override from the env, e.g. ENABLE_VULKAN=1 ENABLE_CUDA=0 ./update-llama.sh).
 # Supports: CUDA only (1/0), Vulkan only (0/1), and both (1/1).
@@ -16,16 +16,74 @@ ENABLE_VULKAN="${ENABLE_VULKAN:-0}"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# We only ever build the latest tip of the default branch and never contribute,
-# so keep a shallow, single-branch checkout with no history.
+print_changelog() {
+  local base="$1" head="$2" json total shown
+  if ! json="$(curl -fsSL "https://api.github.com/repos/${REPO_REPO}/compare/${base}...${head}")"; then
+    printf '\033[1;33mCould not fetch changelog %s -> %s\033[0m\n' "$base" "$head" >&2
+    return 0
+  fi
+  total="$(jq -r '.total_commits' <<<"$json")"
+  shown="$(jq -r '.commits | length' <<<"$json")"
+  printf '\n\033[1;36m╔══════════════════════════════════════════════════════════╗\033[0m\n'
+  printf '\033[1;36m║\033[0m  \033[1mChangelog %s → %s\033[0m  (%s commits)\n' "$base" "$head" "$total"
+  printf '\033[1;36m╚══════════════════════════════════════════════════════════╝\033[0m\n'
+  jq -r '.commits[].commit.message | split("\n")[0]' <<<"$json" | sed 's/^/  • /'
+  if [[ "$total" -gt "$shown" ]]; then
+    printf '\033[2m  …and %s more (API caps at %s)\033[0m\n' "$((total - shown))" "$shown"
+  fi
+  printf '\n'
+}
+
+# Stream a command's output into a fixed N-line dimmed window that updates in
+# place, so the build doesn't flood the terminal. Falls back to plain passthrough
+# when stdout isn't a terminal.
+rolling_view() {
+  local n="$1" cols i
+  if [[ ! -t 1 ]]; then cat; return; fi
+  cols="$(tput cols 2>/dev/null || echo 100)"
+  local -a buf=()
+  for ((i = 0; i < n; i++)); do printf '\n'; done
+  while IFS= read -r line; do
+    line="${line//$'\t'/    }"
+    buf+=("${line:0:cols}")
+    ((${#buf[@]} > n)) && buf=("${buf[@]: -n}")
+    printf '\033[%dA' "$n"
+    for ((i = 0; i < n; i++)); do
+      printf '\033[2K\033[2m%s\033[0m\n' "${buf[i]:-}"
+    done
+  done
+}
+
+have curl || { echo "ERROR: curl is required to resolve the latest release." >&2; exit 1; }
+have jq   || { echo "ERROR: jq is required to render the changelog." >&2; exit 1; }
+
+# Build the latest tagged release (not the unreviewed master tip).
+REPO_TAG="$(curl -fsSL "https://api.github.com/repos/${REPO_REPO}/releases/latest" \
+  | jq -r '.tag_name')"
+if [[ -z "${REPO_TAG}" ]]; then
+  echo "ERROR: could not determine latest ${REPO_REPO} release tag." >&2
+  exit 1
+fi
+echo "Latest release: ${REPO_TAG}"
+
+PREV_TAG=""
+[[ -f "${VERSION_FILE}" ]] && PREV_TAG="$(cat "${VERSION_FILE}")"
+
+if [[ -z "${PREV_TAG}" ]]; then
+  echo "No previously recorded version (first tracked build)."
+elif [[ "${PREV_TAG}" == "${REPO_TAG}" ]]; then
+  echo "Already at ${REPO_TAG}; rebuilding."
+else
+  print_changelog "${PREV_TAG}" "${REPO_TAG}"
+fi
+
+# Shallow checkout of just that tag (no history kept).
 if [[ -d "${REPO_DIR}/.git" ]]; then
-  # Fetch only the newest commit and hard-reset onto it (history isn't kept).
-  git -C "${REPO_DIR}" fetch --depth 1 origin "${REPO_BRANCH}"
-  git -C "${REPO_DIR}" reset --hard FETCH_HEAD
+  git -C "${REPO_DIR}" fetch --depth 1 origin tag "${REPO_TAG}"
+  git -C "${REPO_DIR}" reset --hard "${REPO_TAG}"
   git -C "${REPO_DIR}" clean -fdx -e "${BUILD_DIR}"
 else
-  git clone --depth 1 --single-branch --branch "${REPO_BRANCH}" \
-    "${REPO_URL}" "${REPO_DIR}"
+  git clone --depth 1 --branch "${REPO_TAG}" "${REPO_URL}" "${REPO_DIR}"
 fi
 
 cd "${REPO_DIR}"
@@ -105,27 +163,40 @@ cmake -B "${BUILD_DIR}" \
   "${CMAKE_BACKEND[@]}" \
   -DGGML_NATIVE=ON \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
+  -DCMAKE_INSTALL_PREFIX="$HOME/.local" \
   -DLLAMA_BUILD_TESTS=OFF \
   -DLLAMA_BUILD_EXAMPLES=OFF
 
-cmake --build "${BUILD_DIR}" -j"$(nproc)"
+echo "Building ${REPO_TAG}..."
+cmake --build "${BUILD_DIR}" -j"$(nproc)" 2>&1 | rolling_view 3
 
-# Install into the user prefix (no sudo). Binary lands in ${INSTALL_PREFIX}/bin,
-# shared libs in ${INSTALL_PREFIX}/lib.
+rm -f "$HOME"/.local/lib/libggml*.so* \
+      "$HOME"/.local/lib/libllama*.so* \
+      "$HOME"/.local/lib/libmtmd*.so*
+
 cmake --install "${BUILD_DIR}"
 
-# Ensure the runtime can find the freshly installed shared libraries.
-# Make sure ${INSTALL_PREFIX}/lib is on the loader path (the service file sets
-# LD_LIBRARY_PATH; for an interactive run, export it yourself if needed).
+printf '%s\n' "${REPO_TAG}" > "${VERSION_FILE}"
+echo "Recorded ${REPO_TAG} in ${VERSION_FILE}"
 
-# Restart the local LLM service so it picks up the freshly installed binary.
 SERVICE="local-llm.service"
+UNIT_SRC="${SCRIPT_DIR}/${SERVICE}"
+
+if [[ -f "${UNIT_SRC}" ]]; then
+  echo "Linking ${SERVICE} from ${UNIT_SRC}..."
+  systemctl --user link --force "${UNIT_SRC}"
+else
+  echo "WARNING: ${UNIT_SRC} not found; skipping unit link." >&2
+fi
+
+systemctl --user daemon-reload
+
 if systemctl --user is-enabled --quiet "${SERVICE}" 2>/dev/null \
    || systemctl --user is-active --quiet "${SERVICE}" 2>/dev/null; then
   echo "Restarting ${SERVICE}..."
   systemctl --user restart "${SERVICE}"
-  systemctl --user --no-pager --lines=0 status "${SERVICE}"
+  systemctl --user --no-pager --lines=0 status "${SERVICE}" || true
 else
-  echo "Note: ${SERVICE} not enabled/active for this user; skipping restart." >&2
+  echo "Note: ${SERVICE} not enabled/active; linked unit only." >&2
+  echo "      Enable with: systemctl --user enable --now ${UNIT_SRC}" >&2
 fi
