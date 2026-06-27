@@ -9,8 +9,9 @@ Environment=CUDA_SCALE_LAUNCH_QUEUES=4x
 Environment=HOST=0.0.0.0
 Environment=PORT=10000
 Environment=CONFIG=%h/Documents/local-llm/model-config.ini
+Environment=LD_LIBRARY_PATH=%h/.local/lib
 
-ExecStart=/usr/local/bin/llama-server --host ${HOST} --port ${PORT} --models-preset ${CONFIG}
+ExecStart=%h/.local/bin/llama-server --host ${HOST} --port ${PORT} --models-preset ${CONFIG}
 
 Restart=on-failure
 RestartSec=10

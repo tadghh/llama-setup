@@ -6,6 +6,9 @@ REPO_DIR="llama.cpp"
 REPO_BRANCH="master"
 BUILD_DIR="build"
 
+# Install under the user's home (no root needed). Override with INSTALL_PREFIX=...
+INSTALL_PREFIX="${INSTALL_PREFIX:-$HOME/.local}"
+
 # Backend toggles (override from the env, e.g. ENABLE_VULKAN=1 ENABLE_CUDA=0 ./update-llama.sh).
 # Supports: CUDA only (1/0), Vulkan only (0/1), and both (1/1).
 ENABLE_CUDA="${ENABLE_CUDA:-1}"
@@ -102,13 +105,27 @@ cmake -B "${BUILD_DIR}" \
   "${CMAKE_BACKEND[@]}" \
   -DGGML_NATIVE=ON \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
   -DLLAMA_BUILD_TESTS=OFF \
   -DLLAMA_BUILD_EXAMPLES=OFF
 
 cmake --build "${BUILD_DIR}" -j"$(nproc)"
 
-# If you hit missing library errors post-install:
-#   echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/local.conf
-#   sudo ldconfig
+# Install into the user prefix (no sudo). Binary lands in ${INSTALL_PREFIX}/bin,
+# shared libs in ${INSTALL_PREFIX}/lib.
+cmake --install "${BUILD_DIR}"
 
-sudo cmake --install "${BUILD_DIR}"
+# Ensure the runtime can find the freshly installed shared libraries.
+# Make sure ${INSTALL_PREFIX}/lib is on the loader path (the service file sets
+# LD_LIBRARY_PATH; for an interactive run, export it yourself if needed).
+
+# Restart the local LLM service so it picks up the freshly installed binary.
+SERVICE="local-llm.service"
+if systemctl --user is-enabled --quiet "${SERVICE}" 2>/dev/null \
+   || systemctl --user is-active --quiet "${SERVICE}" 2>/dev/null; then
+  echo "Restarting ${SERVICE}..."
+  systemctl --user restart "${SERVICE}"
+  systemctl --user --no-pager --lines=0 status "${SERVICE}"
+else
+  echo "Note: ${SERVICE} not enabled/active for this user; skipping restart." >&2
+fi
