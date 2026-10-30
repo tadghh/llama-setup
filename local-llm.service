@@ -9,8 +9,10 @@ Environment=CUDA_SCALE_LAUNCH_QUEUES=4x
 Environment=HOST=0.0.0.0
 Environment=PORT=10000
 Environment=CONFIG=%h/Documents/local-llm/model-config.ini
+Environment=XDG_CONFIG_HOME=%h/Documents/local-llm/config
 Environment=LD_LIBRARY_PATH=%h/.local/lib
 
+ExecCondition=/bin/sh -c 'test -e /sys/bus/pci/drivers/nvidia/0000:3b:00.0 && test -e /sys/bus/pci/drivers/nvidia/0000:af:00.0'
 ExecStart=%h/.local/bin/llama-server --host ${HOST} --port ${PORT} --models-preset ${CONFIG}
 
 Restart=on-failure
